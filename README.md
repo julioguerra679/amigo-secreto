@@ -45,7 +45,7 @@ dígitos para consultar su resultado en privado.
 | 🔁 **Regeneración** | Vuelve a sortear cuando quieras; queda el historial |
 | 📧 **Email opcional** | SMTP configurable; si no lo activas, repartes los links a mano |
 | 📄 **Exportación CSV** | Descarga links y códigos para repartirlos |
-| 🧪 **87 tests** | Algoritmo, API, seguridad y flujo completo, en CI contra SQLite **y** PostgreSQL |
+| 🧪 **109 tests** | Algoritmo, API, seguridad y flujo completo, en CI contra SQLite **y** PostgreSQL |
 | 🩺 **Diagnóstico de despliegue** | `/admin/diagnostics` dice qué configuración recibió el servidor, sin filtrar secretos |
 | 🐳 **Listo para desplegar** | Docker, Render, Railway, Fly.io, GitHub Actions |
 
@@ -96,11 +96,20 @@ Abre **http://127.0.0.1:8000**
    Ana - Luis       ← ni Ana a Luis, ni Luis a Ana
    Carla -> Diego   ← solo Carla no le regala a Diego
    ```
+
 4. Pulsa **Cargar participantes** → aparece una tabla con el **código** y el
    **link** de cada persona. Descarga el CSV: los códigos solo se muestran
    una vez.
 5. Pulsa **Generar sorteo**.
 6. Reparte a cada persona su link + su código (por WhatsApp, email, papelito…).
+
+> 💡 **Pega la lista tal cual**, venga de donde venga. La app limpia sola las
+> comas finales de cada línea, los caracteres invisibles que inserta WhatsApp
+> al copiar listas (`U+2060`, que no se ven pero impiden que los nombres
+> cuadren), los espacios duros y los acentos descompuestos de macOS. Al
+> emparejar las exclusiones ignora mayúsculas, da igual `_` que espacios, y
+> si aun así no encuentra a alguien te sugiere el nombre más parecido y te
+> señala **todos** los errores a la vez, no de uno en uno.
 
 ### Flujo del participante
 
@@ -251,6 +260,7 @@ amigo-secreto/
 │   ├── security.py              # PBKDF2, tokens, cookie de admin, bloqueos + CLI
 │   ├── mailer.py                # Envío SMTP opcional
 │   ├── templating.py            # Configuración única de Jinja2
+│   ├── textutils.py             # Limpieza de nombres (invisibles, acentos, mayúsculas)
 │   │
 │   ├── routers/
 │   │   ├── __init__.py
@@ -782,7 +792,7 @@ SMTP_STARTTLS=true
 ```bash
 pip install -r requirements-dev.txt
 
-pytest                       # toda la suite (87 tests)
+pytest                       # toda la suite (109 tests)
 pytest -v                    # detalle test por test
 pytest tests/test_assignment.py   # solo el algoritmo
 ruff check app tests         # linter
@@ -1029,6 +1039,17 @@ Para correr los tests contra PostgreSQL en local:
 ```bash
 TEST_DATABASE_URL=postgresql://postgres@localhost:5432/amigo_test pytest -q
 ```
+
+**Al cargar participantes me dice que una exclusión "no existe", pero el nombre
+está en la lista.**
+Casi siempre son **caracteres invisibles**. Las listas copiadas de WhatsApp
+traen `U+2060` (WORD JOINER) delante de algunas líneas: no se ve, no ocupa
+espacio, y hace que `Laura` y `⁠Laura` sean textos distintos. Como aparece solo
+en algunas líneas, unos nombres cruzan y otros no.
+
+Desde la versión 1.2.0 la app los limpia automáticamente, así que basta con
+volver a pegar la lista. Si el mensaje persiste, te dirá el nombre exacto que
+falló y te sugerirá el más parecido del listado.
 
 **Desplegué y el panel no acepta ninguna contraseña.**
 No adivines: **pregúntale al servidor** abriendo en el navegador

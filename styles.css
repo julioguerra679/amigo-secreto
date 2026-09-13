@@ -130,7 +130,10 @@ input:focus, textarea:focus {
 form.inline { display: inline; margin: 0; }
 
 /* --- Avisos --------------------------------------------------------- */
-.alert { padding: 12px 16px; border-radius: 10px; font-size: 14px; margin: 0 0 16px; }
+/* `pre-line` conserva los saltos de línea de los mensajes con varios
+   problemas listados (p. ej. cinco exclusiones mal escritas a la vez). */
+.alert { padding: 12px 16px; border-radius: 10px; font-size: 14px;
+         margin: 0 0 16px; white-space: pre-line; }
 .alert-ok    { background: #e8f6ef; color: var(--green); border: 1px solid #bfe6d4; }
 .alert-warn  { background: #fdf4e3; color: var(--amber); border: 1px solid #f3e0b8; }
 .alert-error { background: #fdecea; color: var(--red);   border: 1px solid #f5c6c2; }

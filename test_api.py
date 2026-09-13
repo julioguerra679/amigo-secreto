@@ -346,3 +346,80 @@ def test_diagnostics_endpoint_needs_no_admin_session(client) -> None:
 def test_diagnostics_endpoint_does_not_leak_credentials(client) -> None:
     body = client.get("/admin/diagnostics").text
     assert "test-admin-password" not in body
+
+
+# ===========================================================================
+# Listas copiadas de WhatsApp (caracteres invisibles)
+# ===========================================================================
+WJ = "⁠"  # WORD JOINER
+
+
+def test_whatsapp_list_with_invisible_characters_loads(client) -> None:
+    """
+    El invisible aparece en unas líneas y no en otras, así que antes las
+    exclusiones no cruzaban con el listado y la carga fallaba entera.
+    """
+    client.post("/admin/login", data={"password": "test-admin-password"})
+
+    response = client.post(
+        "/admin/participants",
+        data={
+            "participants_raw": (
+                f"Lina_Restrepo,\n{WJ}Daniela_Restrepo,\n{WJ}Eduardo_Castro,\n"
+                f"Danna_Guerra,\n{WJ}adalberto,\n{WJ}cenelia,"
+            ),
+            # Nombres escritos SIN el invisible, como los teclea el organizador.
+            "exclusions_raw": (
+                "Daniela_Restrepo - Eduardo_Castro\nadalberto - cenelia"
+            ),
+        },
+    )
+    assert response.status_code == 200
+    assert "6 participantes" in response.text
+    assert "4 exclusión" in response.text
+    assert "alert-error" not in response.text
+
+
+def test_exclusions_report_every_bad_name_at_once(client) -> None:
+    """Ver los cinco errores de una vez, no de uno en uno recargando."""
+    client.post("/admin/login", data={"password": "test-admin-password"})
+
+    response = client.post(
+        "/admin/participants",
+        data={
+            "participants_raw": "Ana\nLuis\nCarla\nDiego",
+            "exclusions_raw": "Ana - Pedro\nMaria - Luis",
+        },
+    )
+    assert response.status_code == 200
+    assert "Pedro" in response.text
+    assert "Maria" in response.text
+
+
+def test_exclusion_typo_suggests_the_right_name(client) -> None:
+    client.post("/admin/login", data={"password": "test-admin-password"})
+
+    response = client.post(
+        "/admin/participants",
+        data={
+            "participants_raw": "Alexandra_Calderón\nLuis\nCarla\nDiego",
+            "exclusions_raw": "Alexandra_Caldern - Luis",
+        },
+    )
+    assert "Alexandra_Calderón" in response.text
+    assert "Querías decir" in response.text or "no está en el listado" in response.text
+
+
+def test_exclusion_without_accent_still_matches(client) -> None:
+    client.post("/admin/login", data={"password": "test-admin-password"})
+
+    response = client.post(
+        "/admin/participants",
+        data={
+            "participants_raw": "Juan_Carlos_Calderón\nHéctor_Guerra\nCarla\nDiego",
+            "exclusions_raw": "juan carlos calderon - hector guerra",
+        },
+    )
+    assert response.status_code == 200
+    assert "alert-error" not in response.text
+    assert "2 exclusión" in response.text
