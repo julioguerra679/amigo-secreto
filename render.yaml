@@ -54,7 +54,16 @@ services:
         generateValue: true
 
       # `sync: false` = Render lo pide en el panel y NO queda en el repo.
-      # Genera el hash con:  python -m app.security hash-password "tu-clave"
+      #
+      # ⚠️ AQUÍ VA UN HASH, NO TU CONTRASEÑA. Genéralo antes de desplegar:
+      #      python -m app.security hash-password "tu-contraseña"
+      # y pega el resultado COMPLETO, que tiene esta pinta:
+      #      pbkdf2_sha256$200000$3f1a…$9c4b…
+      # Incluye los símbolos '$': si se corta, nadie podrá entrar al panel.
+      #
+      # Si pegas la contraseña en claro la app también te deja entrar (lo
+      # avisa en los logs de arranque), pero queda legible en el panel de
+      # Render. Lo correcto es el hash.
       - key: ADMIN_PASSWORD_HASH
         sync: false
 

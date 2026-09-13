@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Tu código · {{ app_name }}{% endblock %}
+
+{% block content %}
+<section class="card hero">
+  <h1>Hola, {{ participant.name }} 👋</h1>
+
+  {% if not has_draw %}
+    <p class="alert alert-warn">
+      El sorteo todavía no se ha realizado. Guarda este link y vuelve más tarde.
+    </p>
+  {% else %}
+    <p class="lead">Escribe tu código de 4 dígitos para ver a quién le regalas.</p>
+
+    {% if error %}
+      <p class="alert alert-error">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="/participant/{{ token }}" class="stack">
+      <label for="pin">Código de acceso</label>
+      <input type="text" id="pin" name="pin" class="pin-input"
+             inputmode="numeric" pattern="[0-9]*" maxlength="4"
+             autocomplete="off" autofocus required placeholder="••••">
+      <button type="submit" class="btn btn-primary">Ver mi amigo secreto</button>
+    </form>
+
+    <p class="hint">
+      ¿Olvidaste tu código? Pídele al organizador que te genere uno nuevo.
+    </p>
+  {% endif %}
+</section>
+{% endblock %}

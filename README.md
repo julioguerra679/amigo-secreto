@@ -8,7 +8,7 @@ mismo** y que **no existen regalos cruzados** (si a ti te toca Ana, a Ana no
 le tocas tú). Cada participante recibe un link personal y un código de 4
 dígitos para consultar su resultado en privado.
 
-[![CI](https://github.com/julioguerra679/amigo-secreto/actions/workflows/ci.yml/badge.svg)](https://github.com/julioguerra679/amigo-secreto/actions)
+[![CI](https://github.com/TU_USUARIO/amigo-secreto/actions/workflows/ci.yml/badge.svg)](https://github.com/TU_USUARIO/amigo-secreto/actions)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -54,7 +54,7 @@ dígitos para consultar su resultado en privado.
 
 ```bash
 # 1. Clonar
-git clone https://github.com/julioguerra679/amigo-secreto.git
+git clone https://github.com/TU_USUARIO/amigo-secreto.git
 cd amigo-secreto
 
 # 2. Entorno virtual
@@ -502,6 +502,23 @@ python -m app.security hash-password "mi-contraseña-larga"
 
 Pega el hash en `ADMIN_PASSWORD_HASH` y **deja `ADMIN_PASSWORD` vacío**.
 
+> ⚠️ `ADMIN_PASSWORD_HASH` espera el **hash**, no la contraseña. Cópialo
+> entero, incluidos los símbolos `$` — son separadores del formato, y un hash
+> cortado no deja entrar a nadie.
+
+¿No tienes el repo a mano? Este comando genera el hash con solo Python:
+
+```bash
+python -c "import hashlib,secrets,getpass; p=getpass.getpass('Contraseña: ');
+s=secrets.token_hex(16);
+print('pbkdf2_sha256\$200000\$'+s+'\$'+hashlib.pbkdf2_hmac('sha256',p.encode(),bytes.fromhex(s),200000).hex())"
+```
+
+**Si te equivocas y escribes la contraseña en claro en esa variable**, la app
+lo detecta: la acepta como contraseña normal y lo avisa en los logs de
+arranque. Funciona, pero queda legible en el panel de tu plataforma, así que
+cámbialo por el hash cuando puedas.
+
 ### Limitaciones conocidas
 
 * Pensado para grupos de **decenas o pocos cientos** de personas, no para
@@ -784,13 +801,13 @@ gh repo create amigo-secreto --public --source=. --remote=origin --push
 
 #    Opción B — manual: crea el repo vacío en github.com/new y luego:
 git branch -M main
-git remote add origin https://github.com/julioguerra679/amigo-secreto.git
+git remote add origin https://github.com/TU_USUARIO/amigo-secreto.git
 git push -u origin main
 ```
 
 ### Después del primer push
 
-1. **Actualiza el README**: sustituye `julioguerra679` en la URL del badge de CI.
+1. **Actualiza el README**: sustituye `TU_USUARIO` en la URL del badge de CI.
 2. **Comprueba GitHub Actions**: pestaña *Actions* → el workflow debe pasar en
    Python 3.10, 3.11 y 3.12 y construir la imagen Docker.
 3. **Protege `main`** (Settings → Branches → Add rule): exige que CI pase
@@ -992,6 +1009,22 @@ Para correr los tests contra PostgreSQL en local:
 ```bash
 TEST_DATABASE_URL=postgresql://postgres@localhost:5432/amigo_test pytest -q
 ```
+
+**Desplegué en Render y el panel no acepta ninguna contraseña.**
+Casi siempre es porque en `ADMIN_PASSWORD_HASH` se escribió la contraseña en
+claro en lugar del hash. Mira los logs del servicio al arrancar: la app dice
+exactamente cuál de los tres casos tiene delante
+
+```
+Acceso de administrador: hash PBKDF2 ✔                     ← correcto
+⚠️  ADMIN_PASSWORD_HASH no parece un hash PBKDF2 …         ← contraseña en claro
+🚫 No hay contraseña de administrador configurada …        ← falta la variable
+```
+
+Solución: genera el hash (ver [Seguridad](#6-seguridad)), pégalo completo en
+*Environment* → `ADMIN_PASSWORD_HASH` y guarda; Render redespliega solo.
+Comprueba también que `ADMIN_PASSWORD` esté **vacío**: si tiene valor, se
+ignora mientras exista el hash.
 
 **Me sale `disks are not supported for free tier services` al desplegar.**
 Render no ofrece discos persistentes en el plan gratuito. El `render.yaml` de

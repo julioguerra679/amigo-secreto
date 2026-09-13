@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Administración · {{ app_name }}{% endblock %}
+{% block nav %}<a href="/">Inicio</a>{% endblock %}
+
+{% block content %}
+<section class="card hero narrow">
+  <h1>🔐 Panel de administración</h1>
+  <p class="lead">Introduce la contraseña del organizador.</p>
+
+  {% if error %}
+    <p class="alert alert-error">{{ error }}</p>
+  {% endif %}
+
+  <form method="post" action="/admin/login" class="stack">
+    <label for="password">Contraseña</label>
+    <input type="password" id="password" name="password" autofocus required
+           autocomplete="current-password">
+    <button type="submit" class="btn btn-primary">Entrar</button>
+  </form>
+</section>
+{% endblock %}
