@@ -24,7 +24,7 @@ from app import __version__
 from app.config import BASE_DIR, get_settings
 from app.database import init_db
 from app.routers import admin, participant
-from app.security import looks_like_password_hash
+from app.security import describe_admin_auth, looks_like_password_hash
 from app.templating import render
 
 logging.basicConfig(
@@ -175,5 +175,50 @@ async def validation_exception_handler(
 
 @app.get("/health", tags=["infra"], summary="Health check")
 def health() -> dict[str, str]:
-    """Endpoint de salud para balanceadores y plataformas de despliegue."""
+    """
+    Endpoint de salud para balanceadores y plataformas de despliegue.
+
+    El campo `version` sirve además para comprobar **qué código está vivo**:
+    si tras un despliegue sigue apareciendo la versión antigua, la plataforma
+    no ha publicado tus cambios (o estás mirando otro servicio).
+    """
     return {"status": "ok", "version": __version__}
+
+
+@app.get(
+    "/admin/diagnostics",
+    tags=["infra"],
+    summary="Diagnóstico de configuración (no revela secretos)",
+)
+def diagnostics() -> dict:
+    """
+    Responde **qué configuración recibió realmente el servidor**.
+
+    Existe porque el fallo más frustrante al desplegar es "la contraseña no
+    entra" sin saber si el problema está en el hash, en la variable de entorno
+    o en que la plataforma sirve una versión antigua del código.
+
+    Seguridad: no devuelve el hash, ni el salt, ni la contraseña, ni fragmento
+    alguno de ellos — solo formatos, longitudes y banderas. Con esto nadie
+    puede autenticarse. Aun así, puedes apagarlo con `DIAGNOSTICS_ENABLED=false`
+    cuando termines de depurar.
+    """
+    if not settings.diagnostics_enabled:
+        raise StarletteHTTPException(
+            status_code=404, detail="Diagnóstico desactivado."
+        )
+
+    engine = settings.database_url.split(":", 1)[0].split("+", 1)[0]
+    dotenv = BASE_DIR / ".env"
+
+    return {
+        "version": __version__,
+        "app_name": settings.app_name,
+        # Si esto no coincide con la URL desde la que estás leyendo, los links
+        # que reciben los participantes apuntarán al sitio equivocado.
+        "base_url_configurada": settings.public_base_url,
+        "motor_de_base_de_datos": engine,
+        "archivo_dotenv_presente": dotenv.exists(),
+        "secret_key_por_defecto": settings.secret_key.startswith("dev-secret-key"),
+        "acceso_admin": describe_admin_auth(settings),
+    }

@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     admin_password: str = "admin123"
     admin_password_hash: str = ""
     admin_session_minutes: int = 120
+
+    # Expone `GET /admin/diagnostics`, que describe la configuración sin
+    # revelar secretos. Útil al desplegar; se puede apagar después.
+    diagnostics_enabled: bool = True
     max_pin_attempts: int = Field(default=5, ge=1)
     pin_lockout_minutes: int = Field(default=15, ge=1)
 

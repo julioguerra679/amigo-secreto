@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from app.config import Settings
 from app.security import (
+    describe_admin_auth,
     hash_admin_password,
     looks_like_password_hash,
     verify_admin_password,
@@ -117,3 +118,88 @@ def test_no_credentials_configured_fails_closed() -> None:
 def test_empty_password_never_authenticates() -> None:
     settings = _settings(admin_password_hash=hash_admin_password("s3creta"))
     assert not verify_admin_password("", settings)
+
+
+# ===========================================================================
+# Hashes estropeados al copiar y pegar entre terminal y panel web
+# ===========================================================================
+def test_hash_generated_in_powershell_still_works() -> None:
+    """
+    PowerShell y CMD no interpretan el escape `\\$` de bash, así que el
+    one-liner de la documentación produce `pbkdf2_sha256\\$200000\\$…`.
+    """
+    mangled = hash_admin_password("s3creta").replace("$", "\\$")
+    assert verify_admin_password("s3creta", _settings(admin_password_hash=mangled))
+
+
+def test_hash_pasted_with_quotes_still_works() -> None:
+    """Al copiar de un `.env` es fácil arrastrar las comillas."""
+    quoted = f'"{hash_admin_password("s3creta")}"'
+    assert verify_admin_password("s3creta", _settings(admin_password_hash=quoted))
+
+
+def test_hash_split_across_lines_still_works() -> None:
+    """La terminal parte los valores largos; el salto se cuela al copiar."""
+    real = hash_admin_password("s3creta")
+    wrapped = real[:40] + "\n" + real[40:]
+    assert verify_admin_password("s3creta", _settings(admin_password_hash=wrapped))
+
+
+def test_normalization_does_not_weaken_verification() -> None:
+    """Limpiar el valor no debe hacer que pase una contraseña equivocada."""
+    mangled = hash_admin_password("s3creta").replace("$", "\\$")
+    settings = _settings(admin_password_hash=mangled)
+    assert not verify_admin_password("otra", settings)
+    assert not verify_admin_password(mangled, settings)
+
+
+def test_plain_password_with_spaces_is_compared_verbatim() -> None:
+    """
+    La normalización solo se aplica al camino del hash: una contraseña en
+    claro puede llevar espacios y debe compararse tal cual.
+    """
+    settings = _settings(admin_password_hash="mi clave con espacios")
+    assert verify_admin_password("mi clave con espacios", settings)
+    assert not verify_admin_password("miclaveconespacios", settings)
+
+
+# ===========================================================================
+# Diagnóstico: describe la configuración sin filtrar secretos
+# ===========================================================================
+def test_diagnostics_never_leak_the_secret() -> None:
+    secret_hash = hash_admin_password("s3creta")
+    _, _, salt, digest = secret_hash.split("$", 3)
+
+    report = describe_admin_auth(_settings(admin_password_hash=secret_hash))
+    dumped = str(report)
+
+    assert salt not in dumped
+    assert digest not in dumped
+    assert "s3creta" not in dumped
+    assert secret_hash not in dumped
+
+
+def test_diagnostics_identify_each_configuration() -> None:
+    valid = describe_admin_auth(
+        _settings(admin_password_hash=hash_admin_password("s3creta"))
+    )
+    assert valid["modo"].startswith("hash PBKDF2")
+    assert valid["iteraciones"] == 200_000
+    assert valid["caracteres_del_hash"] == 64
+
+    powershell = describe_admin_auth(
+        _settings(admin_password_hash=hash_admin_password("s3creta").replace("$", "\\$"))
+    )
+    assert powershell["contiene_barra_invertida"] is True
+
+    plain = describe_admin_auth(_settings(admin_password_hash="MiClave"))
+    assert "NO es un hash" in plain["modo"]
+
+    nothing = describe_admin_auth(_settings())
+    assert "SIN CONFIGURAR" in nothing["modo"]
+
+
+def test_diagnostics_flag_a_truncated_hash() -> None:
+    full = hash_admin_password("s3creta")
+    report = describe_admin_auth(_settings(admin_password_hash=full[:-20]))
+    assert "cortado" in report["diagnostico"]

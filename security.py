@@ -127,6 +127,36 @@ def lockout_expiry(settings: Settings) -> datetime:
 # ===========================================================================
 # 3. Autenticación del administrador
 # ===========================================================================
+def normalize_password_hash(value: str) -> str:
+    """
+    Limpia el valor de `ADMIN_PASSWORD_HASH` de los estropicios típicos del
+    copiar-pegar entre una terminal y el panel de una plataforma.
+
+    Corrige tres cosas, todas vistas en despliegues reales:
+
+    1. **Barras invertidas antes de `$`.** El one-liner de la documentación
+       escapa los `$` para `bash`; PowerShell y CMD **no** interpretan ese
+       escape, así que quien lo ejecuta en Windows obtiene
+       `pbkdf2_sha256\\$200000\\$…` y pega un hash inválido.
+    2. **Comillas alrededor del valor.** Al copiar de un `.env` es fácil
+       arrastrar las comillas; en el panel de Render pasarían a formar parte
+       del valor.
+    3. **Espacios y saltos de línea**, incluidos los que aparecen cuando la
+       terminal parte el hash en varias líneas al mostrarlo.
+    """
+    value = (value or "").strip()
+
+    # Comillas envolventes.
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1].strip()
+
+    # Escapes de shell y espacios interiores (el hash nunca los lleva).
+    value = value.replace("\\$", "$")
+    value = "".join(value.split())
+
+    return value
+
+
 def looks_like_password_hash(value: str) -> bool:
     """
     ¿El valor tiene la pinta de un hash generado por `hash_admin_password`?
@@ -136,11 +166,13 @@ def looks_like_password_hash(value: str) -> bool:
     Sirve para distinguir un hash real de una contraseña escrita por error en
     la variable `ADMIN_PASSWORD_HASH`.
     """
-    parts = (value or "").strip().split("$")
+    parts = normalize_password_hash(value).split("$")
     return (
         len(parts) == 4
         and parts[0] == "pbkdf2_sha256"
         and parts[1].isdigit()
+        and bool(parts[2])
+        and bool(parts[3])
     )
 
 
@@ -181,7 +213,8 @@ def verify_admin_password(password: str, settings: Settings | None = None) -> bo
     """
     settings = settings or get_settings()
 
-    configured = (settings.admin_password_hash or "").strip()
+    raw = (settings.admin_password_hash or "").strip()
+    configured = normalize_password_hash(raw)
 
     if configured and looks_like_password_hash(configured):
         try:
@@ -200,17 +233,17 @@ def verify_admin_password(password: str, settings: Settings | None = None) -> bo
             return False
         return secrets.compare_digest(digest.hex(), expected)
 
-    if configured:
+    if raw:
         # Valor presente pero que no es un hash: se asume contraseña en claro.
+        # Se compara contra el valor ORIGINAL, no el normalizado: una
+        # contraseña sí puede llevar espacios o barras invertidas.
         logger.warning(
             "ADMIN_PASSWORD_HASH no contiene un hash PBKDF2, así que se está "
             "usando como contraseña en texto plano. Funciona, pero para "
             "producción genera el hash con: "
             'python -m app.security hash-password "tu-contraseña"'
         )
-        return hmac.compare_digest(
-            password.encode("utf-8"), configured.encode("utf-8")
-        )
+        return hmac.compare_digest(password.encode("utf-8"), raw.encode("utf-8"))
 
     plain = settings.admin_password or ""
     if not plain:
@@ -221,6 +254,110 @@ def verify_admin_password(password: str, settings: Settings | None = None) -> bo
         )
         return False
     return hmac.compare_digest(password.encode("utf-8"), plain.encode("utf-8"))
+
+
+def describe_admin_auth(settings: Settings | None = None) -> dict:
+    """
+    Describe **cómo** está configurado el acceso de administrador, sin revelar
+    ningún secreto.
+
+    Qué se expone: si las variables están definidas, qué formato tienen, su
+    longitud y qué caracteres extraños contienen.
+    Qué NO se expone: el hash, el salt, la contraseña ni ningún fragmento de
+    ellos. Con esta información nadie puede entrar al panel, pero tú puedes
+    ver desde fuera si el servidor recibió lo que creías haberle puesto.
+    """
+    raw = settings.admin_password_hash if settings else ""
+    raw = (raw or "")
+    clean = normalize_password_hash(raw)
+    plain = (settings.admin_password if settings else "") or ""
+
+    info: dict = {
+        "ADMIN_PASSWORD_HASH_definida": bool(raw.strip()),
+        "ADMIN_PASSWORD_definida": bool(plain),
+        "longitud_del_valor": len(raw.strip()),
+        "contiene_barra_invertida": "\\" in raw,
+        "contiene_espacios_o_saltos": any(c.isspace() for c in raw.strip()),
+        "contiene_comillas": raw.strip()[:1] in {'"', "'"},
+        "numero_de_simbolos_dolar": clean.count("$"),
+    }
+
+    if not raw.strip() and not plain:
+        info["modo"] = "SIN CONFIGURAR — el panel es inaccesible"
+        info["diagnostico"] = (
+            "Define ADMIN_PASSWORD_HASH (recomendado) o ADMIN_PASSWORD."
+        )
+        return info
+
+    if not raw.strip():
+        info["modo"] = "ADMIN_PASSWORD en texto plano"
+        info["diagnostico"] = (
+            "Funciona. En producción es mejor ADMIN_PASSWORD_HASH."
+        )
+        return info
+
+    if looks_like_password_hash(clean):
+        algorithm, iterations, salt, digest = clean.split("$", 3)
+        info["modo"] = "hash PBKDF2 ✔"
+        info["algoritmo"] = algorithm
+        info["iteraciones"] = int(iterations)
+        info["caracteres_del_salt"] = len(salt)
+        info["caracteres_del_hash"] = len(digest)
+        info["salt_es_hexadecimal"] = _is_hex(salt)
+        info["hash_es_hexadecimal"] = _is_hex(digest)
+
+        problemas = []
+        if raw.strip() != clean:
+            problemas.append(
+                "el valor llegó con caracteres de más (barras invertidas, "
+                "comillas o saltos de línea) y se limpió automáticamente; "
+                "conviene volver a pegarlo tal cual lo genera el script"
+            )
+        if int(iterations) != _PBKDF2_ITERATIONS:
+            problemas.append(
+                f"iteraciones inusuales ({iterations}; lo normal es "
+                f"{_PBKDF2_ITERATIONS}) — no es un error si lo generaste así"
+            )
+        if len(digest) != 64 or not _is_hex(digest):
+            problemas.append(
+                f"el hash debería tener 64 caracteres hexadecimales y tiene "
+                f"{len(digest)} — parece cortado al pegarlo"
+            )
+        if len(salt) != 32 or not _is_hex(salt):
+            problemas.append(
+                f"el salt debería tener 32 caracteres hexadecimales y tiene "
+                f"{len(salt)}"
+            )
+        info["diagnostico"] = (
+            "El formato es correcto. Si aun así la contraseña no entra, es "
+            "que este hash no corresponde a esa contraseña: regenéralo."
+            if not problemas
+            else "; ".join(problemas)
+        )
+        return info
+
+    info["modo"] = "ADMIN_PASSWORD_HASH contiene algo que NO es un hash"
+    if "\\" in raw:
+        info["diagnostico"] = (
+            "Tiene barras invertidas: casi seguro se generó con el one-liner "
+            "de bash pero ejecutado en PowerShell o CMD, que no interpretan "
+            "el escape '\\$'. Regenera el hash con: "
+            "python scripts/admin_password.py generar"
+        )
+    else:
+        info["diagnostico"] = (
+            "Parece una contraseña en texto plano. La app te deja entrar "
+            "escribiéndola tal cual, pero lo correcto es poner el hash."
+        )
+    return info
+
+
+def _is_hex(value: str) -> bool:
+    try:
+        bytes.fromhex(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _serializer(settings: Settings) -> URLSafeTimedSerializer:

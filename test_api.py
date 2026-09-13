@@ -322,3 +322,27 @@ def test_reset_credentials_invalidates_old_link(client) -> None:
 
     # El link viejo ya no existe.
     assert client.get(f"/participant/{old_token}").status_code == 404
+
+
+# ===========================================================================
+# Endpoint de diagnóstico
+# ===========================================================================
+def test_diagnostics_endpoint_reports_configuration(client) -> None:
+    response = client.get("/admin/diagnostics")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert "version" in body
+    assert "base_url_configurada" in body
+    assert body["motor_de_base_de_datos"] in {"sqlite", "postgresql"}
+    assert "modo" in body["acceso_admin"]
+
+
+def test_diagnostics_endpoint_needs_no_admin_session(client) -> None:
+    """Debe poder consultarse justo cuando no consigues entrar al panel."""
+    assert client.get("/admin/diagnostics").status_code == 200
+
+
+def test_diagnostics_endpoint_does_not_leak_credentials(client) -> None:
+    body = client.get("/admin/diagnostics").text
+    assert "test-admin-password" not in body

@@ -45,7 +45,8 @@ dígitos para consultar su resultado en privado.
 | 🔁 **Regeneración** | Vuelve a sortear cuando quieras; queda el historial |
 | 📧 **Email opcional** | SMTP configurable; si no lo activas, repartes los links a mano |
 | 📄 **Exportación CSV** | Descarga links y códigos para repartirlos |
-| 🧪 **65 tests** | Algoritmo, API, seguridad y flujo completo, en CI contra SQLite **y** PostgreSQL |
+| 🧪 **87 tests** | Algoritmo, API, seguridad y flujo completo, en CI contra SQLite **y** PostgreSQL |
+| 🩺 **Diagnóstico de despliegue** | `/admin/diagnostics` dice qué configuración recibió el servidor, sin filtrar secretos |
 | 🐳 **Listo para desplegar** | Docker, Render, Railway, Fly.io, GitHub Actions |
 
 ---
@@ -280,7 +281,8 @@ amigo-secreto/
 │   └── test_api.py              # Flujo end-to-end de la API y del panel
 │
 ├── scripts/
-│   └── demo.py                  # Demo end-to-end con la librería estándar
+│   ├── demo.py                  # Demo end-to-end con la librería estándar
+│   └── admin_password.py        # Generar / verificar el hash del admin (sin dependencias)
 │
 ├── data/
 │   └── .gitkeep                 # Aquí vive la BD (ignorada por git)
@@ -506,18 +508,34 @@ Pega el hash en `ADMIN_PASSWORD_HASH` y **deja `ADMIN_PASSWORD` vacío**.
 > entero, incluidos los símbolos `$` — son separadores del formato, y un hash
 > cortado no deja entrar a nadie.
 
-¿No tienes el repo a mano? Este comando genera el hash con solo Python:
+**La forma recomendada — funciona igual en Windows, macOS y Linux:**
 
 ```bash
-python -c "import hashlib,secrets,getpass; p=getpass.getpass('Contraseña: ');
-s=secrets.token_hex(16);
-print('pbkdf2_sha256\$200000\$'+s+'\$'+hashlib.pbkdf2_hmac('sha256',p.encode(),bytes.fromhex(s),200000).hex())"
+python scripts/admin_password.py generar
 ```
 
-**Si te equivocas y escribes la contraseña en claro en esa variable**, la app
-lo detecta: la acepta como contraseña normal y lo avisa en los logs de
-arranque. Funciona, pero queda legible en el panel de tu plataforma, así que
-cámbialo por el hash cuando puedas.
+Te pide la contraseña dos veces sin mostrarla, genera el hash, **lo verifica
+antes de dártelo** y te dice cuántos caracteres debe tener lo que pegues.
+
+> ⚠️ **No uses un `python -c "…"` de una sola línea en PowerShell o CMD.**
+> Esos shells no interpretan el escape `\$` que necesita bash, así que
+> producen un hash con barras invertidas —
+> `pbkdf2_sha256\$200000\$…` — que es inválido. Es la causa nº 1 de "generé
+> el hash y aun así no entro". Este script evita el problema porque no pasa
+> nada por el shell.
+
+**¿Ya pegaste un hash y no funciona?** Compruébalo sin adivinar:
+
+```bash
+python scripts/admin_password.py verificar   # ¿este hash es de esta contraseña?
+python scripts/admin_password.py revisar     # ¿el formato está bien? (no pide la contraseña)
+```
+
+La app, además, **repara sola** los estropicios más comunes del copiar-pegar
+(barras invertidas, comillas envolventes, saltos de línea) y avisa de ello en
+`/admin/diagnostics`. Y si escribes la contraseña en claro en esa variable, te
+deja entrar igualmente y lo registra en los logs — pero queda legible en el
+panel de tu plataforma, así que cámbialo por el hash cuando puedas.
 
 ### Limitaciones conocidas
 
@@ -547,7 +565,8 @@ Documentación interactiva en **`/docs`**.
 | `GET` | `/participant/{token}` | — | Formulario del código |
 | `POST` | `/participant/{token}` | PIN | Muestra el resultado (HTML) |
 | `GET` | `/api/v1/participant/{token}?pin=1234` | PIN | Resultado (JSON) |
-| `GET` | `/health` | — | Health check |
+| `GET` | `/health` | — | Health check; su `version` dice qué código está vivo |
+| `GET` | `/admin/diagnostics` | — | Diagnóstico de configuración (no revela secretos) |
 | `GET/POST` | `/admin/login` | — | Login del organizador |
 | `GET` | `/admin/dashboard` | 🔐 | Panel |
 | `POST` | `/admin/upload_participants` | 🔐 | **Cargar participantes** |
@@ -731,6 +750,7 @@ Todas las opciones se leen de variables de entorno o del archivo `.env`
 | `ADMIN_PASSWORD` | `admin123` | Contraseña en claro (solo desarrollo) |
 | `ADMIN_PASSWORD_HASH` | *(vacío)* | Hash PBKDF2 de la contraseña (producción) |
 | `ADMIN_SESSION_MINUTES` | `120` | Duración de la sesión del panel |
+| `DIAGNOSTICS_ENABLED` | `true` | Expone `GET /admin/diagnostics`, que describe la configuración sin revelar secretos |
 | `MAX_PIN_ATTEMPTS` | `5` | Intentos antes de bloquear |
 | `PIN_LOCKOUT_MINUTES` | `15` | Duración del bloqueo |
 | `DATABASE_URL` | `sqlite:///./data/amigo_secreto.db` | Cadena de conexión. Acepta SQLite y PostgreSQL; los formatos `postgres://` y `postgresql://` se adaptan solos al driver instalado |
@@ -762,7 +782,7 @@ SMTP_STARTTLS=true
 ```bash
 pip install -r requirements-dev.txt
 
-pytest                       # toda la suite (65 tests)
+pytest                       # toda la suite (87 tests)
 pytest -v                    # detalle test por test
 pytest tests/test_assignment.py   # solo el algoritmo
 ruff check app tests         # linter
@@ -1010,10 +1030,26 @@ Para correr los tests contra PostgreSQL en local:
 TEST_DATABASE_URL=postgresql://postgres@localhost:5432/amigo_test pytest -q
 ```
 
-**Desplegué en Render y el panel no acepta ninguna contraseña.**
-Casi siempre es porque en `ADMIN_PASSWORD_HASH` se escribió la contraseña en
-claro en lugar del hash. Mira los logs del servicio al arrancar: la app dice
-exactamente cuál de los tres casos tiene delante
+**Desplegué y el panel no acepta ninguna contraseña.**
+No adivines: **pregúntale al servidor** abriendo en el navegador
+
+```
+https://tu-app.onrender.com/admin/diagnostics
+```
+
+Devuelve un JSON que describe la configuración que recibió de verdad, sin
+revelar el hash ni la contraseña. Léelo en este orden:
+
+| Campo | Qué significa si falla |
+|---|---|
+| `version` | Si no es la versión que acabas de subir, **la plataforma sirve código antiguo** o estás mirando otro servicio. Empieza por aquí |
+| `base_url_configurada` | Si no coincide con la URL que tienes abierta, apunta a otro sitio y los links de los participantes saldrán mal |
+| `acceso_admin.modo` | `hash PBKDF2 ✔`, `…NO es un hash`, o `SIN CONFIGURAR` |
+| `acceso_admin.contiene_barra_invertida` | `true` ⇒ el hash se generó con el comando de bash en PowerShell o CMD |
+| `acceso_admin.caracteres_del_hash` | Debe ser **64**. Menos ⇒ se cortó al pegarlo |
+| `acceso_admin.diagnostico` | Frase en castellano con la conclusión |
+
+Los logs de arranque dicen lo mismo en una línea:
 
 ```
 Acceso de administrador: hash PBKDF2 ✔                     ← correcto
@@ -1021,10 +1057,24 @@ Acceso de administrador: hash PBKDF2 ✔                     ← correcto
 🚫 No hay contraseña de administrador configurada …        ← falta la variable
 ```
 
-Solución: genera el hash (ver [Seguridad](#6-seguridad)), pégalo completo en
-*Environment* → `ADMIN_PASSWORD_HASH` y guarda; Render redespliega solo.
-Comprueba también que `ADMIN_PASSWORD` esté **vacío**: si tiene valor, se
-ignora mientras exista el hash.
+Si el diagnóstico dice que el formato es correcto pero la contraseña sigue sin
+entrar, entonces ese hash no corresponde a esa contraseña. Compruébalo en tu
+máquina con `python scripts/admin_password.py verificar` y, si no coinciden,
+genera uno nuevo.
+
+Comprueba también que `ADMIN_PASSWORD` esté **vacío**: mientras exista el hash,
+se ignora.
+
+Cuando termines de depurar puedes apagar el endpoint con
+`DIAGNOSTICS_ENABLED=false`.
+
+**Cambié el código pero el despliegue se comporta igual.**
+Abre `/health`: si el `version` no es el del código que subiste, la plataforma
+no ha publicado tus cambios. Causas típicas: los archivos se actualizaron en
+tu carpeta local pero **no se hizo `git push`**; el servicio está conectado a
+otra rama; o hay **dos servicios** en la plataforma de intentos anteriores y
+estás abriendo la URL del viejo. En Render, *Events* te muestra el commit
+exacto que está desplegado.
 
 **Me sale `disks are not supported for free tier services` al desplegar.**
 Render no ofrece discos persistentes en el plan gratuito. El `render.yaml` de
