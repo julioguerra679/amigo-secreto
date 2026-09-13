@@ -1,0 +1,75 @@
+# ---------------------------------------------------------------------------
+# Infraestructura como código para Render.com — PLAN GRATUITO
+#
+# En Render: New > Blueprint > conecta el repo de GitHub. Render lee este
+# archivo y crea el servicio y la base de datos automáticamente.
+#
+# ¿POR QUÉ POSTGRESQL Y NO SQLITE?
+# --------------------------------
+# El plan gratuito de Render NO admite discos persistentes (si intentas
+# declarar uno falla con «disks are not supported for free tier services») y
+# su sistema de archivos es EFÍMERO: se borra en cada redeploy, en cada
+# reinicio y cada vez que el servicio se despierta tras dormirse por
+# inactividad. Una base SQLite ahí se perdería —con ella, los PIN y todo el
+# sorteo— sin previo aviso.
+#
+# La solución en plan gratuito es una base PostgreSQL gestionada, que sí
+# persiste. El código de la app no cambia: todo pasa por el ORM y
+# `app/config.py` adapta automáticamente la URL que entrega Render.
+#
+# ⚠️ LÍMITE IMPORTANTE: las bases PostgreSQL gratuitas de Render EXPIRAN
+#    30 días después de crearlas (+14 días de gracia para pasarlas a plan de
+#    pago antes de que se borren). Para un amigo secreto que se resuelve en
+#    semanas es suficiente; si lo quieres permanente, mira `render-disk.yaml`.
+# ---------------------------------------------------------------------------
+
+databases:
+  - name: amigo-secreto-db
+    plan: free
+    databaseName: amigo_secreto
+    user: amigo_secreto
+
+services:
+  - type: web
+    name: amigo-secreto
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+
+      # Render inyecta aquí la cadena de conexión de la base de arriba.
+      # Llega como `postgresql://…`; `app/config.py` la reescribe a
+      # `postgresql+psycopg://…`, que es el driver instalado.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: amigo-secreto-db
+          property: connectionString
+
+      # Render genera un valor aleatorio y lo mantiene entre despliegues.
+      - key: SECRET_KEY
+        generateValue: true
+
+      # `sync: false` = Render lo pide en el panel y NO queda en el repo.
+      # Genera el hash con:  python -m app.security hash-password "tu-clave"
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+
+      # Debe quedar vacío: en producción manda el hash, no el texto plano.
+      - key: ADMIN_PASSWORD
+        value: ""
+
+      # Tu URL pública, p. ej. https://amigo-secreto.onrender.com
+      # Sin esto, los links que reciben los participantes apuntarían a
+      # localhost y no funcionarían.
+      - key: BASE_URL
+        sync: false
+
+      - key: APP_NAME
+        value: "Amigo Secreto"
+
+      - key: MAIL_ENABLED
+        value: "false"

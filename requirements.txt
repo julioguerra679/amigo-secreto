@@ -1,0 +1,15 @@
+# ---------------------------------------------------------------------------
+# Dependencias de producción — Amigo Secreto
+# Versiones fijadas (pinned) para builds reproducibles.
+# ---------------------------------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+python-multipart==0.0.20      # necesario para formularios HTML (Form(...))
+sqlalchemy==2.0.36            # ORM sobre SQLite o PostgreSQL
+psycopg[binary]==3.2.3        # driver de PostgreSQL (necesario en Render,
+                              # Railway y Fly; inofensivo si usas SQLite)
+pydantic==2.10.4
+pydantic-settings==2.7.0      # carga de configuración desde .env
+itsdangerous==2.2.0           # firma de la cookie de sesión del admin
+email-validator==2.2.0        # validación de EmailStr en los schemas

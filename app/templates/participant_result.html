@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Tu amigo secreto · {{ app_name }}{% endblock %}
+
+{% block content %}
+<section class="card hero reveal">
+  <p class="eyebrow">{{ participant.name }}, le regalas a…</p>
+  <p class="reveal-name">🎁 {{ receiver.name }}</p>
+
+  <p class="lead">
+    Guarda el secreto. Nadie más ha visto este resultado, ni siquiera
+    {{ receiver.name }}.
+  </p>
+
+  <details class="details">
+    <summary>Detalles del sorteo</summary>
+    <ul class="rules">
+      <li>Sorteo #{{ draw.id }} · {{ draw.created_at|datetime }}</li>
+      <li>Algoritmo: <code>{{ draw.algorithm }}</code></li>
+      <li>Semilla pública: <code>{{ draw.seed }}</code></li>
+      <li>Participantes: {{ draw.participant_count }}</li>
+    </ul>
+    <p class="hint">
+      La semilla permite al organizador reproducir y auditar el sorteo sin
+      revelar las asignaciones.
+    </p>
+  </details>
+
+  <a class="btn" href="/">Volver al inicio</a>
+</section>
+{% endblock %}

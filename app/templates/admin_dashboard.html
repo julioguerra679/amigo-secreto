@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}Panel · {{ app_name }}{% endblock %}
+{% block body_class %}wide{% endblock %}
+{% block nav %}
+  <a href="/">Inicio</a>
+  <a href="/docs">API</a>
+  <form method="post" action="/admin/logout" class="inline">
+    <button type="submit" class="btn btn-link">Salir</button>
+  </form>
+{% endblock %}
+
+{% block content %}
+<h1>Panel de administración</h1>
+
+{% if message %}<p class="alert alert-ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="alert alert-error">{{ error }}</p>{% endif %}
+
+<div class="grid">
+
+  {# ------------------------------------------------------------------ #}
+  {# 1. Carga de participantes                                          #}
+  {# ------------------------------------------------------------------ #}
+  <section class="card">
+    <h2>1 · Participantes</h2>
+    <p class="hint">
+      Un participante por línea. Formatos válidos:
+      <code>Ana</code>, <code>Ana, ana@mail.com</code>,
+      <code>Ana &lt;ana@mail.com&gt;</code>.
+    </p>
+    <form method="post" action="/admin/participants" class="stack">
+      <label for="participants_raw">Listado</label>
+      <textarea id="participants_raw" name="participants_raw" rows="9" required
+placeholder="Ana, ana@mail.com
+Luis, luis@mail.com
+Carla
+Diego"></textarea>
+
+      <label for="exclusions_raw">
+        Exclusiones <span class="hint">(opcional)</span>
+      </label>
+      <textarea id="exclusions_raw" name="exclusions_raw" rows="3"
+placeholder="Ana - Luis    (no se regalan entre ellos)
+Carla -> Diego (Carla no le regala a Diego)"></textarea>
+
+      <label class="check">
+        <input type="checkbox" name="send_email" value="1"
+               {% if not mail_configured %}disabled{% endif %}>
+        Enviar los códigos por email
+        {% if not mail_configured %}
+          <span class="hint">(SMTP no configurado)</span>
+        {% endif %}
+      </label>
+
+      <button type="submit" class="btn btn-primary">
+        Cargar participantes
+      </button>
+      <p class="hint">⚠️ Cargar el padrón borra los sorteos anteriores.</p>
+    </form>
+  </section>
+
+  {# ------------------------------------------------------------------ #}
+  {# 2. Sorteo                                                          #}
+  {# ------------------------------------------------------------------ #}
+  <section class="card">
+    <h2>2 · Sorteo</h2>
+
+    {% if draw %}
+      <table class="kv">
+        <tr><th>Sorteo activo</th><td>#{{ draw.id }}</td></tr>
+        <tr><th>Fecha</th><td>{{ draw.created_at|datetime }}</td></tr>
+        <tr><th>Participantes</th><td>{{ draw.participant_count }}</td></tr>
+        <tr><th>Algoritmo</th><td><code>{{ draw.algorithm }}</code></td></tr>
+        <tr><th>Semilla</th><td><code>{{ draw.seed }}</code></td></tr>
+      </table>
+    {% else %}
+      <p class="alert alert-warn">Todavía no se ha generado ningún sorteo.</p>
+    {% endif %}
+
+    <form method="post" action="/admin/draw" class="stack">
+      <label for="seed">
+        Semilla <span class="hint">(opcional — déjala vacía para una aleatoria)</span>
+      </label>
+      <input type="text" id="seed" name="seed" autocomplete="off"
+             placeholder="p. ej. navidad2026">
+      <label for="notes">Nota <span class="hint">(opcional)</span></label>
+      <input type="text" id="notes" name="notes" autocomplete="off"
+             placeholder="Motivo de la regeneración">
+      <button type="submit" class="btn btn-primary">
+        {% if draw %}Regenerar sorteo{% else %}Generar sorteo{% endif %}
+      </button>
+    </form>
+
+    <form method="post" action="/admin/validate" class="stack">
+      <button type="submit" class="btn">Validar sorteo actual</button>
+    </form>
+  </section>
+</div>
+
+{# -------------------------------------------------------------------- #}
+{# Informe de validación                                                #}
+{# -------------------------------------------------------------------- #}
+{% if validation %}
+<section class="card">
+  <h2>Informe de validación</h2>
+  {% if validation.ok %}
+    <p class="alert alert-ok">
+      ✅ Sorteo válido. Se comprobaron {{ validation.checked }} asignaciones:
+      sin autoasignaciones, sin regalos cruzados, sin exclusiones violadas,
+      cobertura completa y reproducible desde la semilla.
+    </p>
+  {% else %}
+    <p class="alert alert-error">
+      ⚠️ Se encontraron {{ validation.issues|length }} problema(s).
+    </p>
+    <ul class="issues">
+      {% for issue in validation.issues %}
+        <li><code>{{ issue.code }}</code> — {{ issue.message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+{# -------------------------------------------------------------------- #}
+{# Credenciales recién emitidas                                         #}
+{# -------------------------------------------------------------------- #}
+{% if credentials %}
+<section class="card">
+  <h2>Credenciales emitidas</h2>
+  <p class="alert alert-warn">
+    Los códigos solo se muestran <strong>una vez</strong>: en la base de datos
+    se guardan hasheados. Cópialos o descarga el CSV antes de salir.
+  </p>
+  <p><a class="btn" href="/admin/credentials.csv">⬇️ Descargar CSV</a></p>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>Participante</th><th>Email</th><th>Código</th><th>Link personal</th></tr>
+      </thead>
+      <tbody>
+        {% for c in credentials %}
+        <tr>
+          <td>{{ c.name }}</td>
+          <td>{{ c.email or '—' }}</td>
+          <td><code class="pin">{{ c.pin }}</code></td>
+          <td><a href="{{ c.link }}" class="mono">{{ c.link }}</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{# -------------------------------------------------------------------- #}
+{# Tabla de asignaciones                                                #}
+{# -------------------------------------------------------------------- #}
+{% if assignments %}
+<section class="card">
+  <h2>Asignaciones del sorteo #{{ draw.id }}</h2>
+  <p class="hint">
+    🔒 Esta tabla revela el resultado completo. Ciérrala antes de compartir
+    pantalla.
+  </p>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>#</th><th>Regala</th><th>→</th><th>Recibe</th></tr>
+      </thead>
+      <tbody>
+        {% for a in assignments %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ a.giver.name }}</td>
+          <td class="arrow">→</td>
+          <td>{{ a.receiver.name }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{# -------------------------------------------------------------------- #}
+{# Participantes registrados                                            #}
+{# -------------------------------------------------------------------- #}
+{% if participants %}
+<section class="card">
+  <h2>Participantes ({{ participants|length }})</h2>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>#</th><th>Nombre</th><th>Email</th>
+          <th>Consultas</th><th>Primera vez</th><th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in participants %}
+        <tr>
+          <td>{{ p.id }}</td>
+          <td>{{ p.name }}</td>
+          <td>{{ p.email or '—' }}</td>
+          <td>{{ p.view_count }}</td>
+          <td>{{ p.first_viewed_at|datetime }}</td>
+          <td>
+            <form method="post" action="/admin/participants/{{ p.id }}/reset"
+                  class="inline">
+              <button type="submit" class="btn btn-small">
+                Nuevo código y link
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{# -------------------------------------------------------------------- #}
+{# Historial de sorteos                                                 #}
+{# -------------------------------------------------------------------- #}
+{% if history|length > 1 %}
+<section class="card">
+  <h2>Historial de sorteos</h2>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>#</th><th>Fecha</th><th>Personas</th><th>Semilla</th>
+            <th>Estado</th><th>Nota</th></tr>
+      </thead>
+      <tbody>
+        {% for d in history %}
+        <tr>
+          <td>{{ d.id }}</td>
+          <td>{{ d.created_at|datetime }}</td>
+          <td>{{ d.participant_count }}</td>
+          <td><code>{{ d.seed }}</code></td>
+          <td>{% if d.is_active %}Activo{% else %}Reemplazado{% endif %}</td>
+          <td>{{ d.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

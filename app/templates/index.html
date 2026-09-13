@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ app_name }} — Consulta tu amigo secreto{% endblock %}
+
+{% block content %}
+<section class="card hero">
+  <h1>🎁 {{ app_name }}</h1>
+  <p class="lead">
+    Cada participante recibió un <strong>link personal</strong> y un
+    <strong>código de 4 dígitos</strong>. Ábrelo, escribe tu código y descubre
+    a quién le regalas.
+  </p>
+
+  {% if has_draw %}
+    <p class="badge badge-ok">El sorteo ya está hecho · {{ total_participants }} participantes</p>
+  {% else %}
+    <p class="badge badge-warn">El sorteo todavía no se ha realizado</p>
+  {% endif %}
+
+  <form method="post" action="/lookup" class="stack">
+    <label for="token">¿Perdiste tu link? Pégalo aquí</label>
+    <input type="text" id="token" name="token" required autocomplete="off"
+           placeholder="https://…/participant/xxxxxxxx o solo el código del link">
+    <button type="submit" class="btn btn-primary">Ir a mi página</button>
+  </form>
+
+  {% if request.query_params.get('error') %}
+    <p class="alert alert-error">No pudimos leer ese link. Revísalo e inténtalo otra vez.</p>
+  {% endif %}
+</section>
+
+<section class="card muted">
+  <h2>Reglas del sorteo</h2>
+  <ul class="rules">
+    <li>Nadie se regala a sí mismo.</li>
+    <li>No hay regalos cruzados: si te toca Ana, a Ana no le tocas tú.</li>
+    <li>La cadena de regalos conecta a todo el grupo en un solo círculo.</li>
+    <li>Solo tú puedes ver tu resultado: hace falta tu link <em>y</em> tu código.</li>
+  </ul>
+</section>
+{% endblock %}

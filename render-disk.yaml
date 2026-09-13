@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Infraestructura como código para Render.com — PLAN DE PAGO (Starter)
+#
+# Alternativa a `render.yaml` para quien quiera SQLite con disco persistente
+# en lugar de PostgreSQL. Requiere plan `starter` (de pago): los discos NO
+# están disponibles en el plan gratuito.
+#
+# Ventajas frente al blueprint gratuito:
+#   · La base de datos NO expira a los 30 días.
+#   · El servicio no se duerme por inactividad.
+#   · Un solo archivo SQLite, fácil de descargar como copia de seguridad.
+#
+# Para usarlo: renómbralo a `render.yaml` (Render solo lee ese nombre) o
+# apunta el blueprint a este archivo desde el panel.
+# ---------------------------------------------------------------------------
+
+services:
+  - type: web
+    name: amigo-secreto
+    runtime: python
+    plan: starter            # ← los discos exigen plan de pago
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: ADMIN_PASSWORD
+        value: ""
+      - key: BASE_URL
+        sync: false
+      - key: APP_NAME
+        value: "Amigo Secreto"
+      - key: MAIL_ENABLED
+        value: "false"
+      # Cuatro barras = ruta absoluta: /var/data/amigo_secreto.db
+      - key: DATABASE_URL
+        value: "sqlite:////var/data/amigo_secreto.db"
+
+    # Disco persistente montado donde vive la base SQLite.
+    disk:
+      name: amigo-secreto-data
+      mountPath: /var/data
+      sizeGB: 1
