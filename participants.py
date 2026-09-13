@@ -16,6 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.links import participant_link_from
 from app.models import Assignment, Draw, Exclusion, Participant
 from app.schemas import (
     ExclusionIn,
@@ -135,6 +136,7 @@ def replace_participants(
     exclusions: Iterable[ExclusionIn],
     settings: Settings,
     replace_existing: bool = True,
+    base_url: str | None = None,
 ) -> tuple[list[ParticipantCredentialsOut], int]:
     """
     Carga el listado de participantes y devuelve `(credenciales, nº exclusiones)`.
@@ -187,9 +189,12 @@ def replace_participants(
     db.flush()  # asigna los ids autoincrementales
 
     # Completa ids y links ahora que la BD asignó las claves primarias.
+    # `base_url` llega ya resuelto desde el router (que conoce la petición);
+    # si no, se usa BASE_URL tal cual.
+    base = (base_url or settings.public_base_url).rstrip("/")
     for participant, cred in zip(created, credentials, strict=True):
         cred.id = participant.id
-        cred.link = settings.participant_link(participant.access_token)
+        cred.link = participant_link_from(base, participant.access_token)
 
     n_exclusions = _apply_exclusions(db, exclusions)
     db.flush()
@@ -242,7 +247,10 @@ def _apply_exclusions(db: Session, exclusions: Iterable[ExclusionIn]) -> int:
 
 
 def regenerate_credentials(
-    db: Session, participant: Participant, settings: Settings
+    db: Session,
+    participant: Participant,
+    settings: Settings,
+    base_url: str | None = None,
 ) -> ParticipantCredentialsOut:
     """
     Emite un PIN y un token nuevos para un participante (p. ej. si perdió el
@@ -259,7 +267,9 @@ def regenerate_credentials(
         name=participant.name,
         email=participant.email,
         pin=pin,
-        link=settings.participant_link(participant.access_token),
+        link=participant_link_from(
+            base_url or settings.public_base_url, participant.access_token
+        ),
     )
 
 

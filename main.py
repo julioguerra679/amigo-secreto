@@ -13,18 +13,26 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import __version__
 from app.config import BASE_DIR, get_settings
-from app.database import init_db
+from app.database import get_db, init_db
+from app.links import (
+    participant_link_from,
+    request_base_url,
+    resolve_base_url,
+)
 from app.routers import admin, participant
 from app.security import describe_admin_auth, looks_like_password_hash
+from app.services import draws as draws_service
+from app.services import participants as participants_service
 from app.templating import render
 
 logging.basicConfig(
@@ -78,6 +86,15 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Base de datos lista (%s)", settings.database_url)
     _check_admin_credentials()
+    if settings.base_url_is_default:
+        logger.warning(
+            "⚠️  BASE_URL sin configurar. Los links se deducirán de cada "
+            "petición (correcto si se usa el panel desde la URL pública), "
+            "pero los correos saldrían apuntando a 127.0.0.1. Define "
+            "BASE_URL con tu dirección pública."
+        )
+    else:
+        logger.info("BASE_URL: %s", settings.public_base_url)
     if settings.secret_key.startswith("dev-secret-key"):
         logger.warning(
             "SECRET_KEY por defecto en uso. Define una propia antes de "
@@ -190,7 +207,7 @@ def health() -> dict[str, str]:
     tags=["infra"],
     summary="Diagnóstico de configuración (no revela secretos)",
 )
-def diagnostics() -> dict:
+def diagnostics(request: Request, db: Session = Depends(get_db)) -> dict:
     """
     Responde **qué configuración recibió realmente el servidor**.
 
@@ -211,12 +228,62 @@ def diagnostics() -> dict:
     engine = settings.database_url.split(":", 1)[0].split("+", 1)[0]
     dotenv = BASE_DIR / ".env"
 
+    # --- Estado de los datos ------------------------------------------------
+    # Si el sitio se desplegó con SQLite sobre un disco efímero, tras cada
+    # reinicio estos contadores vuelven a cero y todos los links dejan de
+    # funcionar de golpe. Verlo aquí ahorra horas de búsqueda a ciegas.
+    participants = participants_service.list_participants(db)
+    draw = draws_service.get_active_draw(db)
+
+    base = resolve_base_url(request, settings)
+    # ⚠️ El ejemplo lleva un token FICTICIO a propósito. Usar aquí el de un
+    # participante real convertiría este endpoint público en una filtración:
+    # el token es la mitad de sus credenciales.
+    ejemplo = participant_link_from(base, "TOKEN-DE-EJEMPLO-NO-REAL")
+
+    links: dict = {
+        "base_que_se_esta_usando": base,
+        "BASE_URL_configurada": (
+            None if settings.base_url_is_default else settings.public_base_url
+        ),
+        "direccion_real_de_esta_peticion": request_base_url(request),
+        "ejemplo_de_link_generado": ejemplo,
+    }
+    if settings.base_url_is_default:
+        links["diagnostico"] = (
+            "BASE_URL no está configurada. Los links se construyen con la "
+            "dirección de cada petición, así que salen bien si el organizador "
+            "usa el panel desde la URL pública. Configúrala de todas formas: "
+            "los correos se generan fuera de una petición y sin ella saldrían "
+            "apuntando a 127.0.0.1."
+        )
+    elif settings.public_base_url != request_base_url(request):
+        links["diagnostico"] = (
+            f"BASE_URL dice {settings.public_base_url!r} pero esta petición "
+            f"llegó a {request_base_url(request)!r}. Si la primera no es tu "
+            "dirección pública real, los links repartidos no abrirán."
+        )
+    else:
+        links["diagnostico"] = "BASE_URL coincide con la dirección real ✔"
+
     return {
         "version": __version__,
         "app_name": settings.app_name,
-        # Si esto no coincide con la URL desde la que estás leyendo, los links
-        # que reciben los participantes apuntarán al sitio equivocado.
-        "base_url_configurada": settings.public_base_url,
+        "links_de_participantes": links,
+        "datos": {
+            "participantes_registrados": len(participants),
+            "sorteo_activo": draw.id if draw else None,
+            "asignaciones": (
+                len(draws_service.get_assignments(db, draw)) if draw else 0
+            ),
+            "diagnostico": (
+                "Sin participantes: si antes los había, la base de datos se "
+                "vació (típico de SQLite sobre un disco efímero). Vuelve a "
+                "cargar la lista y usa PostgreSQL."
+                if not participants
+                else "Hay datos cargados ✔"
+            ),
+        },
         "motor_de_base_de_datos": engine,
         "archivo_dotenv_presente": dotenv.exists(),
         "secret_key_por_defecto": settings.secret_key.startswith("dev-secret-key"),

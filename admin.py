@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.links import participant_link_from, request_base_url, resolve_base_url
 from app.mailer import is_configured as mail_is_configured
 from app.mailer import send_credentials
 from app.models import Participant
@@ -65,16 +66,23 @@ def _guard_html(request: Request, settings: Settings) -> RedirectResponse | None
     return RedirectResponse(url="/admin/login", status_code=303)
 
 
-def _set_session_cookie(response: Response, settings: Settings) -> None:
+def _set_session_cookie(
+    response: Response, settings: Settings, request: Request | None = None
+) -> None:
     response.set_cookie(
         key=ADMIN_COOKIE_NAME,
         value=create_admin_session_token(settings),
         max_age=settings.admin_session_minutes * 60,
         httponly=True,
         samesite="lax",
-        # `secure=True` exige HTTPS. Se activa automáticamente si BASE_URL
-        # es https, para no romper el desarrollo en http://127.0.0.1.
-        secure=settings.public_base_url.startswith("https://"),
+        # `secure=True` exige HTTPS. Se deduce del esquema real con el que
+        # llegó la petición (mirando X-Forwarded-Proto detrás de un proxy), no
+        # de BASE_URL: si BASE_URL estuviera sin configurar, marcar la cookie
+        # como Secure en un sitio HTTP —o no marcarla en uno HTTPS— rompería
+        # el acceso al panel.
+        secure=request_base_url(request).startswith("https://")
+        if request is not None
+        else settings.public_base_url.startswith("https://"),
         path="/",
     )
 
@@ -107,7 +115,7 @@ def login_submit(
             {"error": "Contraseña incorrecta."},
         )
     response = RedirectResponse(url="/admin/dashboard", status_code=303)
-    _set_session_cookie(response, settings)
+    _set_session_cookie(response, settings, request)
     return response
 
 
@@ -121,18 +129,33 @@ def logout():
 # ===========================================================================
 # Dashboard (HTML)
 # ===========================================================================
-def _dashboard_context(db: Session, settings: Settings, **extra) -> dict:
+def _dashboard_context(
+    db: Session, settings: Settings, request: Request | None = None, **extra
+) -> dict:
     """Contexto común del panel, reutilizado por todas las acciones."""
     draw = draws_service.get_active_draw(db)
     assignments = draws_service.get_assignments(db, draw) if draw else []
+    base = resolve_base_url(request, settings)
+    participants = participants_service.list_participants(db)
+
     return {
-        "participants": participants_service.list_participants(db),
+        "participants": participants,
+        # El link de cada persona se reconstruye siempre desde la base de
+        # datos. El PIN no se puede recuperar (está hasheado), pero el link
+        # sí: así el organizador puede reenviarlo sin tener que regenerar
+        # credenciales ni pedirle a nadie que vuelva a empezar.
+        "participant_links": {
+            p.id: participant_link_from(base, p.access_token) for p in participants
+        },
         "draw": draw,
         "assignments": assignments,
         "history": draws_service.get_draw_history(db),
         "credentials": _LAST_CREDENTIALS,
         "mail_configured": mail_is_configured(settings),
-        "base_url": settings.public_base_url,
+        "base_url": base,
+        # Aviso visible si BASE_URL se quedó sin configurar: es la causa de
+        # que los links repartidos no abran en ningún sitio.
+        "base_url_is_default": settings.base_url_is_default,
         "message": None,
         "error": None,
         "validation": None,
@@ -149,7 +172,7 @@ def dashboard(
     redirect = _guard_html(request, settings)
     if redirect:
         return redirect
-    return render(request, "admin_dashboard.html", _dashboard_context(db, settings))
+    return render(request, "admin_dashboard.html", _dashboard_context(db, settings, request))
 
 
 @router.post("/participants", include_in_schema=False)
@@ -177,7 +200,12 @@ def upload_participants_form(
         people = participants_service.parse_participants_text(participants_raw)
         rules = participants_service.parse_exclusions_text(exclusions_raw)
         credentials, n_exclusions = participants_service.replace_participants(
-            db, people, rules, settings, replace_existing=True
+            db,
+            people,
+            rules,
+            settings,
+            replace_existing=True,
+            base_url=resolve_base_url(request, settings),
         )
         db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -185,7 +213,7 @@ def upload_participants_form(
         return render(
             request,
             "admin_dashboard.html",
-            _dashboard_context(db, settings, error=str(exc)),
+            _dashboard_context(db, settings, request, error=str(exc)),
         )
 
     _LAST_CREDENTIALS = credentials
@@ -204,7 +232,7 @@ def upload_participants_form(
     return render(
         request,
         "admin_dashboard.html",
-        _dashboard_context(db, settings, message=message),
+        _dashboard_context(db, settings, request, message=message),
     )
 
 
@@ -231,7 +259,7 @@ def generate_draw_form(
         return render(
             request,
             "admin_dashboard.html",
-            _dashboard_context(db, settings, error=str(exc)),
+            _dashboard_context(db, settings, request, error=str(exc)),
         )
 
     report = draws_service.validate_draw(db, draw)
@@ -243,7 +271,7 @@ def generate_draw_form(
     return render(
         request,
         "admin_dashboard.html",
-        _dashboard_context(db, settings, message=message, validation=report),
+        _dashboard_context(db, settings, request, message=message, validation=report),
     )
 
 
@@ -263,7 +291,7 @@ def validate_form(
         return render(
             request,
             "admin_dashboard.html",
-            _dashboard_context(db, settings, error="Todavía no hay ningún sorteo."),
+            _dashboard_context(db, settings, request, error="Todavía no hay ningún sorteo."),
         )
 
     report = draws_service.validate_draw(db, draw)
@@ -273,6 +301,7 @@ def validate_form(
         _dashboard_context(
             db,
             settings,
+            request,
             validation=report,
             message=(
                 "Validación completada: el sorteo es correcto ✅"
@@ -302,10 +331,12 @@ def reset_credentials_form(
         return render(
             request,
             "admin_dashboard.html",
-            _dashboard_context(db, settings, error="Participante no encontrado."),
+            _dashboard_context(db, settings, request, error="Participante no encontrado."),
         )
 
-    cred = participants_service.regenerate_credentials(db, participant, settings)
+    cred = participants_service.regenerate_credentials(
+        db, participant, settings, base_url=resolve_base_url(request, settings)
+    )
     db.commit()
     _LAST_CREDENTIALS = [cred]
 
@@ -315,6 +346,7 @@ def reset_credentials_form(
         _dashboard_context(
             db,
             settings,
+            request,
             message=(
                 f"Nuevas credenciales para {cred.name}. "
                 "El link anterior ya no funciona."
@@ -358,6 +390,7 @@ def download_credentials(
 )
 def upload_participants(
     payload: UploadParticipantsIn,
+    request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UploadParticipantsOut:
@@ -376,6 +409,7 @@ def upload_participants(
             payload.exclusions,
             settings,
             replace_existing=payload.replace_existing,
+            base_url=resolve_base_url(request, settings),
         )
         db.commit()
     except participants_service.ParticipantServiceError as exc:

@@ -15,6 +15,16 @@
 {% if message %}<p class="alert alert-ok">{{ message }}</p>{% endif %}
 {% if error %}<p class="alert alert-error">{{ error }}</p>{% endif %}
 
+{% if base_url_is_default %}
+<p class="alert alert-warn">
+  ⚠️ <strong>La variable <code>BASE_URL</code> no está configurada.</strong>
+  Los links se están construyendo con la dirección desde la que abriste este
+  panel (<code>{{ base_url }}</code>), que es lo correcto si es la dirección
+  pública de tu sitio. Configura <code>BASE_URL</code> en tu plataforma para
+  que también salga bien en los correos.
+</p>
+{% endif %}
+
 <div class="grid">
 
   {# ------------------------------------------------------------------ #}
@@ -194,8 +204,8 @@ Carla -> Diego (Carla no le regala a Diego)"></textarea>
     <table class="data">
       <thead>
         <tr>
-          <th>#</th><th>Nombre</th><th>Email</th>
-          <th>Consultas</th><th>Primera vez</th><th>Acciones</th>
+          <th>#</th><th>Nombre</th><th>Email</th><th>Link personal</th>
+          <th>Consultas</th><th>Acciones</th>
         </tr>
       </thead>
       <tbody>
@@ -204,8 +214,15 @@ Carla -> Diego (Carla no le regala a Diego)"></textarea>
           <td>{{ p.id }}</td>
           <td>{{ p.name }}</td>
           <td>{{ p.email or '—' }}</td>
+          {# El link se reconstruye desde la base de datos, así que sigue
+             disponible aunque el servidor se haya reiniciado. El PIN no: ese
+             está hasheado y solo se ve al emitirlo. #}
+          <td>
+            <a href="{{ participant_links[p.id] }}" class="mono">
+              {{ participant_links[p.id] }}
+            </a>
+          </td>
           <td>{{ p.view_count }}</td>
-          <td>{{ p.first_viewed_at|datetime }}</td>
           <td>
             <form method="post" action="/admin/participants/{{ p.id }}/reset"
                   class="inline">

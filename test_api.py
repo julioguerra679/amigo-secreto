@@ -333,7 +333,7 @@ def test_diagnostics_endpoint_reports_configuration(client) -> None:
 
     body = response.json()
     assert "version" in body
-    assert "base_url_configurada" in body
+    assert "base_que_se_esta_usando" in body["links_de_participantes"]
     assert body["motor_de_base_de_datos"] in {"sqlite", "postgresql"}
     assert "modo" in body["acceso_admin"]
 
@@ -423,3 +423,85 @@ def test_exclusion_without_accent_still_matches(client) -> None:
     assert response.status_code == 200
     assert "alert-error" not in response.text
     assert "2 exclusión" in response.text
+
+
+# ===========================================================================
+# Links personales: que apunten al sitio correcto
+# ===========================================================================
+def test_links_use_the_real_host_not_localhost(client) -> None:
+    """
+    Con BASE_URL sin configurar, los links deben construirse con la dirección
+    desde la que se está usando el panel, nunca con 127.0.0.1.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    original = settings.base_url
+    settings.base_url = "http://127.0.0.1:8000"  # como si no se hubiera tocado
+    try:
+        body = _upload(client, 5).json()
+        for cred in body["credentials"]:
+            assert "127.0.0.1" not in cred["link"]
+            assert cred["link"].startswith("http://testserver/participant/")
+    finally:
+        settings.base_url = original
+
+
+def test_generated_link_actually_works(client) -> None:
+    """El link que se entrega debe abrir la página del participante."""
+    credentials = _upload(client, 5).json()["credentials"]
+    client.post("/admin/generate_assignments", json={}, headers=ADMIN_HEADERS)
+
+    ana = next(c for c in credentials if c["name"] == "Ana")
+    page = client.get(ana["link"])          # el link tal cual, completo
+    assert page.status_code == 200
+
+    result = client.post(ana["link"], data={"pin": ana["pin"]})
+    assert result.status_code == 200
+    assert "reveal-name" in result.text
+
+
+def test_dashboard_shows_every_participant_link(client) -> None:
+    """
+    Los links deben poder recuperarse siempre desde la base de datos, aunque
+    se haya reiniciado el servidor y se hayan perdido los PIN en memoria.
+    """
+    _upload(client, 5)
+
+    import app.routers.admin as admin_router
+
+    admin_router._LAST_CREDENTIALS = []      # simula el reinicio
+
+    client.post("/admin/login", data={"password": "test-admin-password"})
+    page = client.get("/admin/dashboard")
+
+    assert page.status_code == 200
+    assert page.text.count("/participant/") >= 5
+    assert "Credenciales emitidas" not in page.text   # los PIN sí se perdieron
+
+
+def test_pasting_the_pin_instead_of_the_link_is_explained(client) -> None:
+    response = client.post("/lookup", data={"token": "1234"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert "error=pin" in response.headers["location"]
+
+    page = client.get("/?error=pin")
+    assert "código de 4 dígitos" in page.text
+
+
+def test_diagnostics_reports_link_configuration(client) -> None:
+    body = client.get("/admin/diagnostics").json()
+    links = body["links_de_participantes"]
+
+    assert links["base_que_se_esta_usando"] == "http://testserver"
+    assert "diagnostico" in links
+    assert body["datos"]["participantes_registrados"] == 0
+
+
+def test_diagnostics_never_exposes_a_real_token(client) -> None:
+    credentials = _upload(client, 4).json()["credentials"]
+    tokens = [c["link"].rsplit("/", 1)[-1] for c in credentials]
+
+    body = client.get("/admin/diagnostics").text
+    for token in tokens:
+        assert token not in body

@@ -21,6 +21,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Raíz del proyecto (…/amigo-secreto). `__file__` está en …/amigo-secreto/app/.
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 
+# Valor por defecto de BASE_URL: solo sirve para desarrollo local. Si al
+# desplegar no se cambia, los links que reciben los participantes apuntarían a
+# la máquina de quien los abre, no al servidor. Por eso la app detecta este
+# valor y, en ese caso, deduce la dirección real de cada petición.
+DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+
 
 def normalize_database_url(url: str) -> str:
     """
@@ -59,7 +65,7 @@ class Settings(BaseSettings):
 
     # --- Identidad del evento ---------------------------------------------
     app_name: str = "Amigo Secreto"
-    base_url: str = "http://127.0.0.1:8000"
+    base_url: str = DEFAULT_BASE_URL
 
     # --- Seguridad ---------------------------------------------------------
     secret_key: str = "dev-secret-key-cambiala-en-produccion"
@@ -97,8 +103,27 @@ class Settings(BaseSettings):
         """BASE_URL normalizada, sin barra final."""
         return self.base_url.rstrip("/")
 
+    @property
+    def base_url_is_default(self) -> bool:
+        """
+        ¿Se quedó BASE_URL sin configurar?
+
+        Es el error de despliegue más silencioso de todos: la aplicación
+        funciona, el sorteo se genera, el panel se ve bien… y los links que se
+        reparten apuntan a `127.0.0.1`, es decir, al ordenador de quien los
+        abre. El participante ve un "no se encuentra el sitio" y nadie
+        sospecha del servidor.
+        """
+        return self.public_base_url == DEFAULT_BASE_URL.rstrip("/")
+
     def participant_link(self, token: str) -> str:
-        """Construye el link único que se entrega a un participante."""
+        """
+        Construye el link único a partir de BASE_URL.
+
+        Cuando hay una petición HTTP a mano es preferible
+        `app.links.participant_link(request, settings, token)`, que sabe
+        deducir la dirección real aunque BASE_URL esté sin configurar.
+        """
         return f"{self.public_base_url}/participant/{token}"
 
 

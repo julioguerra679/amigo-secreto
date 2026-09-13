@@ -37,7 +37,7 @@ dígitos para consultar su resultado en privado.
 |---|---|
 | 🎲 **Sorteo correcto por construcción** | Sin autoasignaciones ni regalos cruzados; imposible generar un resultado inválido |
 | 🚫 **Exclusiones** | «Ana y Luis son pareja, que no se regalen entre ellos» |
-| 🔗 **Link único por persona** | Token aleatorio de 32 bytes, imposible de adivinar |
+| 🔗 **Link único por persona** | Token aleatorio de 32 bytes; recuperable desde el panel en cualquier momento |
 | 🔢 **Código de 4 dígitos** | Segundo factor; guardado con PBKDF2, nunca en claro |
 | 🛡️ **Anti fuerza bruta** | Bloqueo temporal tras N intentos fallidos |
 | 🔐 **Panel de administrador** | Con contraseña, cookie firmada y expiración de sesión |
@@ -45,7 +45,7 @@ dígitos para consultar su resultado en privado.
 | 🔁 **Regeneración** | Vuelve a sortear cuando quieras; queda el historial |
 | 📧 **Email opcional** | SMTP configurable; si no lo activas, repartes los links a mano |
 | 📄 **Exportación CSV** | Descarga links y códigos para repartirlos |
-| 🧪 **109 tests** | Algoritmo, API, seguridad y flujo completo, en CI contra SQLite **y** PostgreSQL |
+| 🧪 **125 tests** | Algoritmo, API, seguridad y flujo completo, en CI contra SQLite **y** PostgreSQL |
 | 🩺 **Diagnóstico de despliegue** | `/admin/diagnostics` dice qué configuración recibió el servidor, sin filtrar secretos |
 | 🐳 **Listo para desplegar** | Docker, Render, Railway, Fly.io, GitHub Actions |
 
@@ -261,6 +261,7 @@ amigo-secreto/
 │   ├── mailer.py                # Envío SMTP opcional
 │   ├── templating.py            # Configuración única de Jinja2
 │   ├── textutils.py             # Limpieza de nombres (invisibles, acentos, mayúsculas)
+│   ├── links.py                 # Links personales con la dirección pública correcta
 │   │
 │   ├── routers/
 │   │   ├── __init__.py
@@ -755,7 +756,7 @@ Todas las opciones se leen de variables de entorno o del archivo `.env`
 | Variable | Por defecto | Descripción |
 |---|---|---|
 | `APP_NAME` | `Amigo Secreto` | Nombre mostrado en la interfaz |
-| `BASE_URL` | `http://127.0.0.1:8000` | URL pública; se usa para construir los links |
+| `BASE_URL` | `http://127.0.0.1:8000` | URL pública; se usa para construir los links. Si se deja sin configurar, la app deduce la dirección de cada petición para no repartir links rotos — pero los correos sí la necesitan |
 | `SECRET_KEY` | *(dev)* | Clave de firma de la cookie de admin. **Cámbiala** |
 | `ADMIN_PASSWORD` | `admin123` | Contraseña en claro (solo desarrollo) |
 | `ADMIN_PASSWORD_HASH` | *(vacío)* | Hash PBKDF2 de la contraseña (producción) |
@@ -792,7 +793,7 @@ SMTP_STARTTLS=true
 ```bash
 pip install -r requirements-dev.txt
 
-pytest                       # toda la suite (109 tests)
+pytest                       # toda la suite (125 tests)
 pytest -v                    # detalle test por test
 pytest tests/test_assignment.py   # solo el algoritmo
 ruff check app tests         # linter
@@ -1039,6 +1040,40 @@ Para correr los tests contra PostgreSQL en local:
 ```bash
 TEST_DATABASE_URL=postgresql://postgres@localhost:5432/amigo_test pytest -q
 ```
+
+**Los links de los participantes dan "no se encuentra el sitio".**
+El link apunta a otra dirección. Casi siempre porque `BASE_URL` se quedó sin
+configurar al desplegar y valía `http://127.0.0.1:8000` — es decir, el
+ordenador de quien abre el enlace. Compruébalo en `/admin/diagnostics`:
+
+```jsonc
+"links_de_participantes": {
+  "base_que_se_esta_usando": "https://tu-app.onrender.com",
+  "BASE_URL_configurada": null,                       // ← sin configurar
+  "ejemplo_de_link_generado": "https://tu-app.onrender.com/participant/…",
+  "diagnostico": "BASE_URL no está configurada…"
+}
+```
+
+Desde la versión 1.3.0 la app ya no reparte links rotos: si `BASE_URL` falta,
+los construye con la dirección real desde la que estás usando el panel
+(leyendo `X-Forwarded-Proto` para que salgan en `https`). Aun así,
+**configúrala**: los correos se generan fuera de una petición y sin ella
+seguirían apuntando a `127.0.0.1`.
+
+Los links correctos están siempre en el panel, en la columna **Link personal**
+de la tabla de participantes. Se reconstruyen desde la base de datos, así que
+puedes reenviárselos a quien haga falta sin regenerar nada: **los códigos de 4
+dígitos siguen siendo los mismos**.
+
+**Un participante dice que su link no es válido.**
+Dos causas posibles:
+
+* Está pegando su **código de 4 dígitos** en la casilla del link. La portada
+  ahora lo detecta y se lo explica.
+* Volviste a pulsar **Cargar participantes** después de repartir los links. Esa
+  acción regenera los tokens de todos, así que los enlaces antiguos mueren.
+  Reparte los nuevos desde la columna **Link personal**.
 
 **Al cargar participantes me dice que una exclusión "no existe", pero el nombre
 está en la lista.**
