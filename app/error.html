@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Error {{ status_code }} · {{ app_name }}{% endblock %}
+
+{% block content %}
+<section class="card hero narrow">
+  <h1>Error {{ status_code }}</h1>
+  <p class="lead">{{ detail }}</p>
+  <a class="btn" href="/">Volver al inicio</a>
+</section>
+{% endblock %}

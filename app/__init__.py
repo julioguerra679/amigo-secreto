@@ -1,3 +1,1 @@
-"""Amigo Secreto — aplicación FastAPI para organizar sorteos de regalo."""
-
-__version__ = "1.0.0"
+"""Lógica de negocio, independiente de FastAPI y del ORM donde es posible."""

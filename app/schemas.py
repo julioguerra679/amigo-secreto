@@ -11,6 +11,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.textutils import clean_text, name_key
+
 
 # ---------------------------------------------------------------------------
 # Entrada
@@ -23,8 +25,10 @@ class ParticipantIn(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def _strip_name(cls, v: str) -> str:
-        v = " ".join(v.split())  # colapsa espacios internos y recorta
+    def _clean_name(cls, v: str) -> str:
+        # `clean_text` quita los caracteres invisibles que arrastran las listas
+        # copiadas de WhatsApp o del correo, y unifica acentos y espacios.
+        v = clean_text(v)
         if not v:
             raise ValueError("El nombre no puede estar vacío")
         return v
@@ -50,7 +54,9 @@ class UploadParticipantsIn(BaseModel):
     def _unique_names(cls, v: list[ParticipantIn]) -> list[ParticipantIn]:
         seen: set[str] = set()
         for p in v:
-            key = p.name.casefold()
+            # Se compara por clave normalizada: "Ana_María" y "ana maría"
+            # son la misma persona y deben rechazarse como duplicado.
+            key = name_key(p.name)
             if key in seen:
                 raise ValueError(f"Nombre duplicado en la carga: {p.name!r}")
             seen.add(key)
