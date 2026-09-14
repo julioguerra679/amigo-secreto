@@ -10,11 +10,13 @@ from __future__ import annotations
 import csv
 import io
 from collections.abc import Iterable, Sequence
+from difflib import get_close_matches
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.links import participant_link_from
 from app.models import Assignment, Draw, Exclusion, Participant
 from app.schemas import (
     ExclusionIn,
@@ -22,6 +24,7 @@ from app.schemas import (
     ParticipantIn,
 )
 from app.security import generate_access_token, generate_pin, hash_pin
+from app.textutils import clean_text, name_key, name_key_loose
 
 
 class ParticipantServiceError(RuntimeError):
@@ -44,7 +47,73 @@ def get_by_token(db: Session, token: str) -> Participant | None:
 
 
 def get_by_name(db: Session, name: str) -> Participant | None:
-    return db.scalar(select(Participant).where(Participant.name == name))
+    """
+    Busca un participante por nombre, tolerando las variaciones típicas de
+    quien escribe a mano: mayúsculas, `_` frente a espacios, caracteres
+    invisibles y —como último recurso— acentos.
+    """
+    return _resolve_name(list_participants(db), name)[0]
+
+
+def _resolve_name(
+    participants: Sequence[Participant], name: str
+) -> tuple[Participant | None, str | None]:
+    """
+    Resuelve un nombre contra la lista de participantes.
+
+    Returns:
+        `(participante, motivo_del_fallo)`. Si se encuentra, el motivo es None.
+
+    Estrategia en tres pasos, de más estricto a más tolerante:
+      1. Coincidencia exacta del texto ya limpio.
+      2. Clave normalizada (ignora mayúsculas y `_` frente a espacios).
+      3. Clave sin acentos, pero **solo si no es ambigua**: si dos personas
+         distintas coinciden al quitar los acentos, se prefiere fallar a
+         asignar la exclusión a quien no era.
+    """
+    if not name or not name.strip():
+        return None, "el nombre está vacío"
+
+    cleaned = clean_text(name)
+
+    exact = {p.name: p for p in participants}
+    if cleaned in exact:
+        return exact[cleaned], None
+
+    key = name_key(cleaned)
+    by_key: dict[str, list[Participant]] = {}
+    for participant in participants:
+        by_key.setdefault(name_key(participant.name), []).append(participant)
+
+    if key in by_key and len(by_key[key]) == 1:
+        return by_key[key][0], None
+
+    loose = name_key_loose(cleaned)
+    by_loose: dict[str, list[Participant]] = {}
+    for participant in participants:
+        by_loose.setdefault(name_key_loose(participant.name), []).append(participant)
+
+    candidates = by_loose.get(loose, [])
+    if len(candidates) == 1:
+        return candidates[0], None
+    if len(candidates) > 1:
+        nombres = ", ".join(sorted(p.name for p in candidates))
+        return None, (
+            f"{name!r} coincide con varias personas si se ignoran los acentos "
+            f"({nombres}). Escríbelo igual que en el listado."
+        )
+
+    # No se encontró: se construye una pista útil.
+    suggestions = get_close_matches(
+        key, list(by_key.keys()), n=3, cutoff=0.75
+    )
+    if suggestions:
+        similares = ", ".join(
+            sorted({by_key[s][0].name for s in suggestions})
+        )
+        return None, f"{name!r} no está en el listado. ¿Querías decir: {similares}?"
+
+    return None, f"{name!r} no está en el listado de participantes."
 
 
 def exclusion_map(db: Session) -> dict[int, set[int]]:
@@ -67,6 +136,7 @@ def replace_participants(
     exclusions: Iterable[ExclusionIn],
     settings: Settings,
     replace_existing: bool = True,
+    base_url: str | None = None,
 ) -> tuple[list[ParticipantCredentialsOut], int]:
     """
     Carga el listado de participantes y devuelve `(credenciales, nº exclusiones)`.
@@ -119,9 +189,12 @@ def replace_participants(
     db.flush()  # asigna los ids autoincrementales
 
     # Completa ids y links ahora que la BD asignó las claves primarias.
+    # `base_url` llega ya resuelto desde el router (que conoce la petición);
+    # si no, se usa BASE_URL tal cual.
+    base = (base_url or settings.public_base_url).rstrip("/")
     for participant, cred in zip(created, credentials, strict=True):
         cred.id = participant.id
-        cred.link = settings.participant_link(participant.access_token)
+        cred.link = participant_link_from(base, participant.access_token)
 
     n_exclusions = _apply_exclusions(db, exclusions)
     db.flush()
@@ -130,27 +203,54 @@ def replace_participants(
 
 
 def _apply_exclusions(db: Session, exclusions: Iterable[ExclusionIn]) -> int:
-    """Traduce exclusiones por nombre a filas `(participant_id, excluded_id)`."""
+    """
+    Traduce exclusiones por nombre a filas `(participant_id, excluded_id)`.
+
+    Los errores se acumulan y se informan **todos juntos**: si el listado tiene
+    cinco exclusiones mal escritas, es absurdo obligar al organizador a
+    descubrirlas de una en una, recargando entre cada intento.
+    """
+    people = list_participants(db)
     count = 0
-    for rule in exclusions:
-        giver = get_by_name(db, rule.giver)
-        receiver = get_by_name(db, rule.receiver)
+    problems: list[str] = []
+
+    for number, rule in enumerate(exclusions, start=1):
+        giver, giver_error = _resolve_name(people, rule.giver)
+        receiver, receiver_error = _resolve_name(people, rule.receiver)
+
+        for error in (giver_error, receiver_error):
+            if error:
+                problems.append(f"Exclusión {number}: {error}")
+
         if giver is None or receiver is None:
-            raise ParticipantServiceError(
-                f"Exclusión inválida: no existe {rule.giver!r} o {rule.receiver!r}."
-            )
+            continue
         if giver.id == receiver.id:
-            continue  # la autoexclusión ya es implícita
+            problems.append(
+                f"Exclusión {number}: {rule.giver!r} y {rule.receiver!r} son la "
+                "misma persona; nadie se regala a sí mismo de todas formas."
+            )
+            continue
+
         db.add(Exclusion(participant_id=giver.id, excluded_id=receiver.id))
         count += 1
         if rule.mutual:
             db.add(Exclusion(participant_id=receiver.id, excluded_id=giver.id))
             count += 1
+
+    if problems:
+        raise ParticipantServiceError(
+            "No se pudieron aplicar estas exclusiones:\n· "
+            + "\n· ".join(problems)
+        )
+
     return count
 
 
 def regenerate_credentials(
-    db: Session, participant: Participant, settings: Settings
+    db: Session,
+    participant: Participant,
+    settings: Settings,
+    base_url: str | None = None,
 ) -> ParticipantCredentialsOut:
     """
     Emite un PIN y un token nuevos para un participante (p. ej. si perdió el
@@ -167,7 +267,9 @@ def regenerate_credentials(
         name=participant.name,
         email=participant.email,
         pin=pin,
-        link=settings.participant_link(participant.access_token),
+        link=participant_link_from(
+            base_url or settings.public_base_url, participant.access_token
+        ),
     )
 
 
@@ -189,7 +291,15 @@ def parse_participants_text(raw: str) -> list[ParticipantIn]:
     participants: list[ParticipantIn] = []
 
     for line_number, line in enumerate(raw.splitlines(), start=1):
-        line = line.strip()
+        # `clean_text` retira aquí los caracteres invisibles (los que inserta
+        # WhatsApp, por ejemplo) antes de cualquier otra cosa: si no, se
+        # pegarían al nombre y luego nada cuadraría con las exclusiones.
+        line = clean_text(line)
+
+        # Las listas copiadas suelen traer coma o punto y coma al final de cada
+        # línea. Se quitan para que no generen un email vacío ni un nombre raro.
+        line = line.rstrip(",;").strip()
+
         if not line or line.startswith("#"):
             continue
 
@@ -221,11 +331,21 @@ def parse_participants_text(raw: str) -> list[ParticipantIn]:
     if not participants:
         raise ParticipantServiceError("No se encontró ningún participante válido.")
 
-    names = [p.name.casefold() for p in participants]
-    duplicates = {n for n in names if names.count(n) > 1}
+    # Duplicados por clave normalizada: "Ana_María" y "ana maría" son la misma
+    # persona y tener a las dos rompería el sorteo.
+    seen: dict[str, str] = {}
+    duplicates: list[str] = []
+    for participant in participants:
+        key = name_key(participant.name)
+        if key in seen:
+            duplicates.append(f"{seen[key]!r} y {participant.name!r}")
+        else:
+            seen[key] = participant.name
+
     if duplicates:
         raise ParticipantServiceError(
-            "Hay nombres repetidos: " + ", ".join(sorted(duplicates))
+            "Hay nombres repetidos (se consideran iguales ignorando mayúsculas "
+            "y guiones bajos): " + "; ".join(duplicates)
         )
 
     return participants
@@ -239,24 +359,38 @@ def parse_exclusions_text(raw: str) -> list[ExclusionIn]:
         Ana -> Luis       (solo Ana no le regala a Luis)
     """
     rules: list[ExclusionIn] = []
-    for line in raw.splitlines():
-        line = line.strip()
+
+    for line_number, line in enumerate(raw.splitlines(), start=1):
+        # Mismo saneado que en el listado de participantes: sin esto, un
+        # carácter invisible haría que el nombre no cuadrara con nadie.
+        line = clean_text(line).rstrip(",;").strip()
+
         if not line or line.startswith("#"):
             continue
-        if "->" in line:
-            left, _, right = line.partition("->")
+
+        # Se aceptan varios guiones porque los teclados y los correctores
+        # sustituyen el guion normal por rayas tipográficas sin avisar.
+        if "->" in line or "→" in line:
+            separator = "->" if "->" in line else "→"
+            left, _, right = line.partition(separator)
             mutual = False
-        elif "-" in line:
-            left, _, right = line.partition("-")
-            mutual = True
         else:
-            raise ParticipantServiceError(
-                f"Exclusión mal formada: {line!r}. Usa 'Ana - Luis' o 'Ana -> Luis'."
-            )
+            separator = next((s for s in ("—", "–", "-") if s in line), None)
+            if separator is None:
+                raise ParticipantServiceError(
+                    f"Línea {line_number}: exclusión mal formada ({line!r}). "
+                    "Usa 'Ana - Luis' (mutua) o 'Ana -> Luis' (en un sentido)."
+                )
+            left, _, right = line.partition(separator)
+            mutual = True
+
         left, right = left.strip(), right.strip()
         if not left or not right:
-            raise ParticipantServiceError(f"Exclusión incompleta: {line!r}.")
+            raise ParticipantServiceError(
+                f"Línea {line_number}: falta un nombre en la exclusión ({line!r})."
+            )
         rules.append(ExclusionIn(giver=left, receiver=right, mutual=mutual))
+
     return rules
 
 
