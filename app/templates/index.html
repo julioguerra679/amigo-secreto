@@ -17,14 +17,28 @@
   {% endif %}
 
   <form method="post" action="/lookup" class="stack">
-    <label for="token">¿Perdiste tu link? Pégalo aquí</label>
+    <label for="token">Pega aquí tu link personal</label>
     <input type="text" id="token" name="token" required autocomplete="off"
-           placeholder="https://…/participant/xxxxxxxx o solo el código del link">
+           placeholder="https://…/participant/xxxxxxxxxxxxxxxx">
+    <p class="hint">
+      Es el enlace largo que te envió el organizador — <strong>no</strong> tu
+      código de 4 dígitos: ese se escribe después, ya dentro de tu página.
+    </p>
     <button type="submit" class="btn btn-primary">Ir a mi página</button>
   </form>
 
-  {% if request.query_params.get('error') %}
-    <p class="alert alert-error">No pudimos leer ese link. Revísalo e inténtalo otra vez.</p>
+  {% set error = request.query_params.get('error') %}
+  {% if error == 'pin' %}
+    <p class="alert alert-warn">
+      Eso parece tu <strong>código de 4 dígitos</strong>, no tu link. Aquí va
+      el enlace largo; el código lo escribirás en la página siguiente.
+    </p>
+  {% elif error == 'vacio' %}
+    <p class="alert alert-error">Escribe o pega tu link para continuar.</p>
+  {% elif error %}
+    <p class="alert alert-error">
+      No pudimos leer ese link. Revísalo e inténtalo otra vez.
+    </p>
   {% endif %}
 </section>
 
