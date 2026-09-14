@@ -54,12 +54,24 @@ def _extract_token(raw: str) -> str:
 
 
 def _load_participant(db: Session, token: str) -> Participant:
-    participant = participants_service.get_by_token(db, _extract_token(token))
+    clean = _extract_token(token)
+    participant = participants_service.get_by_token(db, clean)
+
     if participant is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Link no válido. Verifica que lo copiaste completo.",
-        )
+        if clean.isdigit():
+            detail = (
+                "Eso es tu código de 4 dígitos, no tu link personal. "
+                "Abre el link que te envió el organizador y escribe el código allí."
+            )
+        else:
+            detail = (
+                "Este link no corresponde a ningún participante. Puede que esté "
+                "incompleto, o que el organizador haya vuelto a cargar la lista "
+                "(al hacerlo se generan links nuevos para todos). Pídele el suyo "
+                "actualizado."
+            )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+
     return participant
 
 
@@ -122,10 +134,21 @@ def home(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/lookup", include_in_schema=False)
 def lookup(token: str = Form(...)):
-    """Redirige al link personal a partir de lo que el usuario pegó."""
+    """
+    Redirige al link personal a partir de lo que el usuario pegó.
+
+    Se distingue el caso de quien escribe aquí su **código de 4 dígitos**: es
+    la confusión más natural del mundo —el participante recibe dos cosas y
+    este campo pide una de ellas— y devolver "link no válido" no le dice nada.
+    """
     clean = _extract_token(token)
+
     if not clean:
-        return RedirectResponse(url="/?error=1", status_code=303)
+        return RedirectResponse(url="/?error=vacio", status_code=303)
+
+    if clean.isdigit() and len(clean) <= 6:
+        return RedirectResponse(url="/?error=pin", status_code=303)
+
     return RedirectResponse(url=f"/participant/{clean}", status_code=303)
 
 
